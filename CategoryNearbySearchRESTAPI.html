@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Category Nearby Search REST API</title>
+    <meta charset="utf-8" />
+
+    <!-- Add references to the Azure Maps Map control JavaScript and CSS files. -->
+    <link rel="stylesheet" href="https://atlas.microsoft.com/sdk/javascript/mapcontrol/2/atlas.min.css" type="text/css" />
+    <script src="https://atlas.microsoft.com/sdk/javascript/mapcontrol/2/atlas.min.js"></script>
+
+    <!-- Add a reference to the Azure Maps Services Module JavaScript file. -->
+    <script src="https://atlas.microsoft.com/sdk/javascript/service/2/atlas-service.min.js"></script>
+
+    <script>
+        var map, searchURL, datasource, popup, lastSearchPosition;
+        var minSearchZoom = 15;             //The minium zoom level the user must be zoomed into before POI data is searched/displayed.
+        var minSearchCenterOffset = 200;  //The minimum distance in meters the map center mush move before a new search is done.
+        var maxSearchResults = 500;         //The maximum number of points of interests that will be queried on each update.
+        //The service has a limit of 100 results, but additional results can be accesed by paging through the results.
+
+        function GetMap() {
+            //Instantiate a map object
+            map = new atlas.Map('myMap', {
+                center: [-122.13687658309935, 47.64452336193245],
+                zoom: 14,
+                view: 'Auto',
+                renderWorldCopies: false,
+                authOptions: {
+                    authType: 'subscriptionKey',
+                    subscriptionKey: ''
+                }
+            });
+
+            //Use MapControlCredential to share authentication between a map control and the service module.
+            var pipeline = atlas.service.MapsURL.newPipeline(new atlas.service.MapControlCredential(map));
+
+            //Create an instance of the SearchURL client.
+            searchURL = new atlas.service.SearchURL(pipeline);
+
+            //Wait until the map resources are ready.
+            map.events.add('ready', function () {
+
+                //Create a data source and add it to the map.
+                datasource = new atlas.source.DataSource();
+                map.sources.add(datasource);
+                
+                //Create a symbol layer to render the points.
+                poiLayer = new atlas.layer.SymbolLayer(datasource, null, {
+                    iconOptions: {
+                        //The map control has built in icons for bar, coffee and restaurant that we can use.
+                        //image: ['get', 'code', ['at', 0, ['get', 'classifications', ['get', 'poi', ['get', 'results']]]]],        //'restaurant', //['get', 'category'],
+                        //image: 'shop',
+
+                        image: [
+                            'match',
+
+                            ['get', 'code', ['at', 0, ['get', 'classifications', ['get', 'poi']]]],
+                            'RESTAURANT', 'restaurant',
+                            'SHOP', 'coffee',
+                            'red'
+                        ],
+                        anchor: 'center',
+                        allowOverlap: true
+                    },
+                    textOptions: {
+                        anchor: "top"
+                    }
+                });
+                map.layers.add(poiLayer);
+                
+                var searchNearByUrl = 'https://{azMapsDomain}/search/nearby/json?api-version=1.0&lat=47.64452336193245&lon=-122.13687658309935&limit=100&ofs=0&categorySet=7315,9361,7383&countrySet=us&radius=5000&language=en&subscription-key=gfQ3G_3FKFAHyS_ASJmxCbIxVBiWwzdg0Xjok3ADLJg'
+                
+                // Search Nearby POI with a categorySet
+                var nearbyPOIs = processRequest(searchNearByUrl).then(searchResult => {
+
+                    // var geoJSONString = '{ "type": "FeatureCollection", "features": [ { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-100, 45] }, "properties": { "custom-property": "value" } } ] }';
+                    // var featureCollection = atlas.service.FeatureCollection.fromJson(searchResult);
+
+                    const geoJson = {
+                        type: "FeatureCollection",
+                        features: []
+                    };
+
+                    searchResult.results.forEach(result => {
+                        const feature = {
+                            type: "Feature",
+                            geometry: {
+                                type: "Point",
+                                coordinates: [result.position.lon, result.position.lat]
+                            },
+                            properties: {
+                                type: 'POI',
+                                poi: result.poi,
+                                address: result.address
+                            }
+                        };
+
+                        geoJson.features.push(feature);
+                    });
+
+                    datasource.add(geoJson);
+                });
+
+                //Create a reusable popup.
+                popup = new atlas.Popup();
+
+                //Add a click event to the poi layer.
+                map.events.add('click', poiLayer, poiClicked);
+
+            })
+        }
+
+        // This is a reusable function that sets the Azure Maps platform domain,
+        // sends the request, and makes use of any transformRequest set on the map.
+        function processRequest(url) {
+
+            return new Promise((resolve, reject) => {
+                // Replace the domain placeholder to ensure the same Azure Maps cloud is used throughout the app.
+                url = url.replace('{azMapsDomain}', atlas.getDomain());
+
+                // Get the authentication details from the map for use in the request.
+                var requestParams = map.authentication.signRequest({ url: url });
+
+                // Transform the request.
+                var transform = map.getServiceOptions().tranformRequest;
+                if (transform) {
+                    requestParams = transform(url);
+                }
+
+                // Get the result from the API
+                fetch(requestParams.url, {
+                    method: 'GET',
+                    mode: 'cors',
+                    headers: new Headers(requestParams.headers)
+                })
+                    .then(r => r.json(), e => reject(e))
+                    .then(r => {
+                        resolve(r);
+                    }, e => reject(e));
+            });
+        }
+
+        function poiClicked(e) {
+
+            //Make sure the event occurred on a point feature.
+            if (e.shapes && e.shapes.length > 0 && e.shapes[0].getType() === 'Point') {
+                var properties = e.shapes[0].getProperties();
+
+                //Using the properties, create HTML to fill the popup with useful information.
+                var html = ['<div style="padding:10px;"><span style="font-size:14px;font-weight:bold;">'];
+                var addressInTitle = false;
+
+                if (properties.type === 'POI' && properties.poi && properties.poi.name) {
+                    html.push(properties.poi.name);
+                } else if (properties.address && properties.address.freeformAddress) {
+                    html.push(properties.address.freeformAddress);
+                    addressInTitle = true;
+                }
+
+                html.push('</span><br/>');
+
+                if (!addressInTitle && properties.address && properties.address.freeformAddress) {
+                    html.push(properties.address.freeformAddress, '<br/>');
+                }
+
+                html.push('<b>Type: </b>', properties.type, '<br/>');
+
+                if (properties.entityType) {
+                    html.push('<b>Entity Type: </b>', properties.entityType, '<br/>');
+                }
+
+                if (properties.type === 'POI' && properties.poi) {
+                    if (properties.poi.phone) {
+                        html.push('<b>Phone: </b>', properties.poi.phone, '<br/>');
+                    }
+
+                    if (properties.poi.url) {
+                        html.push('<b>URL: </b>', properties.poi.url, '<br/>');
+                    }
+
+                    if (properties.poi.classifications) {
+                        html.push('<b>Classifications:</b><br/>');
+                        for (var i = 0; i < properties.poi.classifications.length; i++) {
+                            for (var j = 0; j < properties.poi.classifications[i].names.length; j++) {
+                                html.push(' - ', properties.poi.classifications[i].names[j].name, '<br/>');
+                            }
+                        }
+                    }
+
+                }
+
+                html.push('</div>');
+
+                //Set the popup options.
+                popup.setOptions({
+                    //Update the content of the popup.
+                    content: html.join(''),
+
+                    //Update the position of the popup with the pins coordinate.
+                    position: e.shapes[0].getCoordinates()
+                });
+
+                //Open the popup.
+                popup.open(map);
+            }
+        }
+    </script>
+
+    <style>
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+        }
+
+        #myMap {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body onload="GetMap()">
+    <div id="myMap"></div>
+</body>
+
+</html>

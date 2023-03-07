@@ -16,12 +16,13 @@
         function GetMap() {
             //Instantiate a map object
             var map = new atlas.Map("myMap", {
-                view: 'Auto',
+                view: 'Auto',                
+                renderWorldCopies: false,
 
                 // Add your Azure Maps primary subscription key. https://aka.ms/am-primaryKey
                 authOptions: {
                     authType: 'subscriptionKey',
-                    subscriptionKey: 'MgxSdVP9ECSi_dEX5430m80L14jsRGiIv-cF6l9h2gY'
+                    subscriptionKey: ''
                 }
             });
 
@@ -51,7 +52,7 @@
                 // Construct the SearchURL object
                 var searchURL = new atlas.service.SearchURL(pipeline);
 
-                var query = 'pharmacy';
+                var query = 'hospital';
                 var radius = 9000;
                 var lat = 47.64452336193245;
                 var lon = -122.13687658309935;
